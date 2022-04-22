@@ -2018,24 +2018,56 @@ class TestCircularSerialization(TestCase):
         def classify(self, x):
             return 0
 
-        def __init__(self):
-            self._dp = dp.iter.IterableWrapper([1, 2, 4]).map(self.add_one).demux(2, self.classify)[0]
+        def __init__(self, fn, source_dp=None):
+            self.fn = fn
+            self.source_dp = source_dp if source_dp else dp.iter.IterableWrapper([1, 2, 4])
+            self._dp = self.source_dp.map(self.add_one).demux(2, self.classify)[0]
 
         def __iter__(self):
             yield from self._dp
 
-    def test_circular_reference(self):
-        self.assertEqual(
-            list(TestCircularSerialization.CustomIterDataPipe()),
-            list(pickle.loads(pickle.dumps(TestCircularSerialization.CustomIterDataPipe())))
-        )
-        _ = traverse(TestCircularSerialization.CustomIterDataPipe(), only_datapipe=True)
-        _ = traverse(TestCircularSerialization.CustomIterDataPipe(), only_datapipe=False)
+    def test_circular_serialization_with_pickle(self):
+        # Test for circular reference issue with pickle
+        self.assertTrue(list(TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn)) ==
+                        list(pickle.loads(pickle.dumps(TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn)))))
+        _ = traverse(TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn), only_datapipe=True)
+        _ = traverse(TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn), only_datapipe=False)
 
-    # TODO: Ensure this works with `dill` installed
-    # @skipIfNoDill
-    # def test_circular_serialization_with_dill(self):
-    #     assert list(self._CustomIterDataPipe()) == list(dill.loads(dill.dumps(self._CustomIterDataPipe())))
+        dp1 = TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn)
+        dp2 = TestCircularSerialization.CustomIterDataPipe(fn=_fake_fn, source_dp=dp1)
+        self.assertTrue(list(dp2) == list(pickle.loads(pickle.dumps(dp2))))
+        _ = traverse(dp2, only_datapipe=True)
+        _ = traverse(dp2, only_datapipe=False)
+
+    class LambdaIterDataPipe(IterDataPipe):
+        def add_one(self, x):
+            return x + 1
+
+        def classify(self, x):
+            return 0
+
+        def __init__(self, fn, source_dp=None):
+            self.fn = fn
+            self.lambda_fn = lambda x: x + 1
+            self.source_dp = source_dp if source_dp else dp.iter.IterableWrapper([1, 2, 4])
+            self._dp = self.source_dp.map(self.add_one).map(self.lambda_fn).demux(2, self.classify)[0]
+
+        def __iter__(self):
+            yield from self._dp
+
+    @skipIfNoDill
+    def test_circular_serialization_with_dill(self):
+        # Test for circular reference issue with dill
+        self.assertTrue(list(TestCircularSerialization.LambdaIterDataPipe(lambda x: x + 1)) ==
+                        list(dill.loads(dill.dumps(TestCircularSerialization.LambdaIterDataPipe(lambda x: x + 1)))))
+        _ = traverse(TestCircularSerialization.LambdaIterDataPipe(fn=_fake_fn), only_datapipe=True)
+        _ = traverse(TestCircularSerialization.LambdaIterDataPipe(fn=_fake_fn), only_datapipe=False)
+
+        dp1 = TestCircularSerialization.LambdaIterDataPipe(fn=_fake_fn)
+        dp2 = TestCircularSerialization.LambdaIterDataPipe(fn=_fake_fn, source_dp=dp1)
+        self.assertTrue(list(dp2) == list(dill.loads(pickle.dumps(dp2))))
+        _ = traverse(dp2, only_datapipe=True)
+        _ = traverse(dp2, only_datapipe=False)
 
 
 class TestSharding(TestCase):
