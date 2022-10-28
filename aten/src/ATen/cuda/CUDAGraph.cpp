@@ -5,6 +5,8 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAFunctions.h>
 
+#include <iostream>
+
 namespace at {
 namespace cuda {
 
@@ -181,8 +183,11 @@ void CUDAGraph::capture_end() {
 
   // Now that we've instantiated graph_ into graph_exec_,
   // we don't need graph_ anymore.
-  AT_CUDA_CHECK(cudaGraphDestroy(graph_));
+  if (!preserve_graph_) {
   has_graph_ = false;
+    AT_CUDA_CHECK(cudaGraphDestroy(graph_));
+    has_graph_ = false;
+  }
 #else
   TORCH_CHECK(false, "CUDA graphs may only be used in Pytorch built with CUDA >= 11.0 and not yet supported on ROCM");
 #endif
@@ -268,6 +273,113 @@ MempoolId_t CUDAGraph::pool() {
   TORCH_CHECK(false, "CUDA graphs may only be used in Pytorch built with CUDA >= 11.0 and not yet supported on ROCM");
 #endif
   return mempool_id_;
+}
+
+inline std::vector<cudaGraphNode_t> CUDAGraph::get_nodes(cudaGraph_t cuda_graph) {
+  size_t numNodes;
+  AT_CUDA_CHECK(cudaGraphGetNodes(cuda_graph, static_cast<cudaGraphNode_t*>(nullptr), &numNodes));
+  if (numNodes == 0)
+    return std::vector<cudaGraphNode_t>();
+  std::vector<cudaGraphNode_t> graphNodes(numNodes);
+  AT_CUDA_CHECK(cudaGraphGetNodes(cuda_graph, graphNodes.data(), &numNodes));
+  return graphNodes;
+}
+
+inline std::string CUDAGraph::get_node_info(const cudaGraphNode_t node) {
+  std::stringstream ss;
+
+  cudaGraphNodeType pType;
+  AT_CUDA_CHECK(cudaGraphNodeGetType(node, &pType));
+  printf("Graph type = %i; ", pType);
+
+  switch (pType) {
+    case cudaGraphNodeTypeKernel: {
+      cudaKernelNodeParams kparams = {0};
+      AT_CUDA_CHECK(cudaGraphKernelNodeGetParams(node, &kparams));
+
+      ss << "GPUKernel@" << kparams.func;
+      ss << "<<<gridDim=(" << kparams.gridDim.x << ", "<< kparams.gridDim.y << ", " << kparams.gridDim.z << "), "
+         << "blockDim=(" << kparams.blockDim.x << ", "<< kparams.blockDim.y << ", "<< kparams.blockDim.z << ")>>>";
+      ss << "(";
+
+      int64_t address_start = 1024;
+      for(int64_t i=0; (int64_t)kparams.kernelParams[i] > address_start; i++) {
+        void *ptr = *(void**)kparams.kernelParams[i];
+        ss << reinterpret_cast<int64_t>(ptr) << ", ";
+      }
+
+      ss << ")";
+      if (kparams.sharedMemBytes != 0)
+        ss << ", dynSharedMemBytes=" << kparams.sharedMemBytes;
+    } break;
+    case cudaGraphNodeTypeMemcpy: {
+      cudaMemcpy3DParms mparams = {};
+      AT_CUDA_CHECK(cudaGraphMemcpyNodeGetParams(node, &mparams));
+
+      // If memcpy is seen, return without setting up runnable executor
+      switch (mparams.kind) {
+        case cudaMemcpyHostToHost:
+          ss << "Host->Host ";
+          break;
+        case cudaMemcpyHostToDevice:
+          ss << "Host->Device ";
+          break;
+        case cudaMemcpyDeviceToHost:
+          ss << "Device->Host ";
+          break;
+        case cudaMemcpyDeviceToDevice:
+          ss << "Device->Device ";
+          break;
+        default:
+          break;
+      }
+      ss << "Memcpy";
+    } break;
+    case cudaGraphNodeTypeMemset: {
+      cudaMemsetParams mparams = {};
+      AT_CUDA_CHECK(cudaGraphMemsetNodeGetParams(node, &mparams));
+      if (mparams.height == 1 && mparams.elementSize == 1) {
+        ss << "cudaMemset(devPtr=" << mparams.dst << ", value=" << mparams.value
+           << ", count=" << mparams.width << ")";
+      } else {
+        if (mparams.elementSize == 1)
+          ss << "cudaMemset2D";
+        else
+          ss << "MemSet<elemBytes=" << mparams.elementSize << ">";
+        ss << "(devPtr=" << mparams.dst << ", pitch=" << mparams.pitch
+           << ", value=" << mparams.value << ", width=" << mparams.width
+           << ", height=" << mparams.height << ")";
+      }
+    } break;
+    case cudaGraphNodeTypeHost:
+      ss << "Host (executable) node";
+      break;
+    case cudaGraphNodeTypeGraph:
+      ss << "Node which executes an embedded graph";
+      break;
+    case cudaGraphNodeTypeEmpty:
+      ss << "Empty (no-op) node";
+      break;
+    default:
+      ss << "Unknown/Invalid node type " << pType;
+  }
+
+  return ss.str();
+}
+
+void CUDAGraph::update_params(std::vector<Tensor> old_params, std::vector<Tensor> new_params) {
+  TORCH_CHECK(preserve_graph_ && has_graph_);
+
+  std::vector<cudaGraphNode_t> nodes = get_nodes(graph_);
+
+  for(auto param : old_params) {
+    std::cout<< reinterpret_cast<int64_t>(param.data_ptr()) << '\n';
+  }
+
+  for(auto node : nodes) {
+    TORCH_CHECK(node != NULL);
+    std::cout<<get_node_info(node) << '\n';
+  }
 }
 
 CUDAGraph::~CUDAGraph() {
