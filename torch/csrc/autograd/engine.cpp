@@ -330,32 +330,6 @@ void Engine::thread_init(
 
   at::init_num_threads();
 
-  // Note [Allocating GPUs to autograd threads]
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  // What's our strategy here?  Originally, the autograd engine was written
-  // with only CUDA in mind.  We allocate one thread to handle all CPU
-  // operations, and a thread per CUDA device.
-  //
-  // But what if we have OTHER devices?  There are two plausible
-  // strategies:
-  //
-  //  - We can allocate threads equal to max(num_cuda_devices, num_xla_devices,
-  //    ...) and colocate cuda device 0 with xla device 0
-  //  - We can allocate threads equal to sum(num_cuda_devices, num_xla_devices,
-  //    ...) keeping everyone separate.
-  //
-  // We don't have any good reason to prefer one or the other, so we've
-  // arbitrarily picked to colocate devices.  Maybe the other approach is
-  // better.
-
-#if defined(USE_CUDA)
-  if (at::detail::getCUDAHooks().hasPrimaryContext(device)) {
-    set_device(device);
-  }
-#else
-  set_device(device);
-#endif
-
   // initialize each device thread's thread local ready queue with the ready
   // queue that is created before the thread initialization
   init_local_ready_queue(ready_queue);
@@ -513,6 +487,14 @@ auto Engine::thread_main(const std::shared_ptr<GraphTask>& graph_task) -> void {
       // block and can be deallocated (release any references to grad tensors
       // as part of inputs_).
       NodeTask task = local_ready_queue->pop();
+
+      for (const auto& impl_atomic : c10::impl::device_guard_impl_registry) {
+        auto* impl = impl_atomic.load();
+        if (impl && !should_run_in_cpu_ready_queue(impl->type())) {
+          set_device(impl->getDevice().index());
+        }
+      }
+
       // This will only work if the worker is running a non backward task
       // TODO Needs to be fixed this to work in all cases
       if (task.isShutdownTask_) {
