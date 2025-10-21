@@ -6,6 +6,7 @@ import ctypes
 import dataclasses
 import functools
 import logging
+import multiprocessing
 import os
 import pickle
 import queue
@@ -56,6 +57,11 @@ CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 autotuning_log = getArtifactLogger(__name__, "autotuning")
 
 
+def _side_process_job(job, queue):
+    result = job()
+    queue.value = result
+
+
 class NonzeroWorkspaceNotSupportedError(Exception):
     pass
 
@@ -83,7 +89,13 @@ class TuningProcess:
                     # None is a sentinel for the child to shut down
                     break
                 try:
-                    result = job()
+                    val = multiprocessing.RawValue("f", float("inf"))
+                    p = multiprocessing.Process(
+                        target=_side_process_job, args=(job, val)
+                    )
+                    p.start()
+                    p.join()
+                    result = val.value
                 except Exception as e:
                     result = e
                 TuningProcess.send(result, write_pipe)
