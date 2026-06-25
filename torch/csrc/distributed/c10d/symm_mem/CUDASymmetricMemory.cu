@@ -975,24 +975,19 @@ c10::intrusive_ptr<Block> CUDASymmetricMemoryAllocator::find_block(void* ptr) {
  * the base ptr; error out if not found */
 c10::intrusive_ptr<Block> CUDASymmetricMemoryAllocator::find_block_covering(void* ptr, size_t& offset) {
   std::shared_lock lock(mutex_);
-  // In case of MemPool, tensor.storage().data_ptr() may not match
-  // exactly an allocation's base address. Thus we perform the search by
-  // testing if the former is within an allocation's range.
-  auto alloc_it = std::find_if(ptr_to_block_.begin(), ptr_to_block_.end(),
-                             [&](const auto& pair){
-                                auto& block = pair.second;
-                                auto& allocation = block->alloc_ref;
-                                auto ptr_int = reinterpret_cast<uintptr_t>(ptr);
-                                auto base_ptr = reinterpret_cast<uintptr_t>(allocation->ptr);
-                                // Modify offset so that it is returned
-                                offset = ptr_int - base_ptr;
-                                return ptr_int >= base_ptr && offset < block->buffer_size; });
-
-  if (alloc_it == ptr_to_block_.end()) {
-    return nullptr;
+  // ptr_to_block_ is ordered by base address. Find the first entry with
+  // base > ptr, then step back to the candidate whose range may cover ptr.
+  auto it = ptr_to_block_.upper_bound(ptr);
+  if (it != ptr_to_block_.begin()) {
+    --it;
+    auto base_ptr = reinterpret_cast<uintptr_t>(it->second->alloc_ref->ptr);
+    auto ptr_int = reinterpret_cast<uintptr_t>(ptr);
+    offset = ptr_int - base_ptr;
+    if (offset < it->second->buffer_size) {
+      return it->second;
+    }
   }
-
-  return alloc_it->second;
+  return nullptr;
 }
 
 bool CUDASymmetricMemoryAllocator::has_allocation(void* ptr) {

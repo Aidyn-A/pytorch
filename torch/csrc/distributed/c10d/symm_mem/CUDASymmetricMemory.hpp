@@ -148,7 +148,7 @@ class CUDASymmetricMemoryAllocator : public SymmetricMemoryAllocator {
   c10::intrusive_ptr<Block> find_block_covering(void* ptr, size_t& offset);
 
   std::shared_mutex mutex_;
-  std::unordered_map<void*, c10::intrusive_ptr<Block>> ptr_to_block_;
+  std::map<void*, c10::intrusive_ptr<Block>> ptr_to_block_;
   c10::cuda::CUDACachingAllocator::Expandable_Segments_Handle_Type
       handle_type_ = c10::cuda::CUDACachingAllocator::
           Expandable_Segments_Handle_Type::UNSPECIFIED;
