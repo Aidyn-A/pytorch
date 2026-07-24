@@ -1904,6 +1904,19 @@ class GraphLowering(torch.fx.Interpreter):
             return None
         return custom["mempool"], custom["mempool_device"]
 
+    @staticmethod
+    def _mempool_is_cudagraph_managed(node_mempool: tuple[int, int]) -> bool:
+        """True if this user MemPool is registered with cudagraph_trees."""
+        mempool_index, mempool_device = node_mempool
+        try:
+            from torch._dynamo.graph_bytecode_inputs import get_external_object_by_index
+            from torch._inductor.cudagraph_trees import is_registered_external
+
+            pool = get_external_object_by_index(mempool_index)
+            return is_registered_external(mempool_device, pool.id)
+        except Exception:
+            return False
+
     def _realize_inputs_at_context_boundaries(self, n: torch.fx.Node) -> None:
         """Realize IR inputs that are in a different stream or mempool context.
 
@@ -1979,10 +1992,11 @@ class GraphLowering(torch.fx.Interpreter):
             origins |= gather_origins(args, kwargs)
             self._realize_inputs_at_context_boundaries(n)
         node_mempool = self._get_node_mempool(n)
-        if node_mempool is not None and self.disable_cudagraphs_reason is None:
-            # User MemPool regions must route allocations to the explicit pool.
-            # CUDA graphs use a private capture pool, so capture would violate
-            # that routing and trip cudagraph memory-pool assertions.
+        if (
+            node_mempool is not None
+            and self.disable_cudagraphs_reason is None
+            and not self._mempool_is_cudagraph_managed(node_mempool)
+        ):
             self.disable_cudagraphs_reason = (
                 "user CUDA MemPool contexts are not compatible with CUDA graphs"
             )
