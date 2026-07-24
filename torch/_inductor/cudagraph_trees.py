@@ -1506,6 +1506,8 @@ class CUDAGraphNode:
             CUDAGraphCaptureControlFlowOpDispatchMode(),
             get_history_recording(),
         ):
+            for pool_id, _ in self.managed_pools[1:]:
+                self.graph._retain_pool(pool_id)
             static_outputs = model(inputs)
 
         # running model should reclaim memory
@@ -2364,7 +2366,9 @@ class CUDAGraphTreeManager:
                     capture_error_mode="thread_local",
                 ),
             ):
-                pass
+                for pid in _registered_external.get(device_index, {}):
+                    if pid != self.cuda_graphs_thread_pool:
+                        self.graph._retain_pool(pid)
 
         # Private capture pool + registered external pools, snapshotted at creation.
         ext = _registered_external.get(device_index, {})
