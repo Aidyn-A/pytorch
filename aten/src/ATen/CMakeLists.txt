@@ -446,6 +446,16 @@ IF(USE_MSLK)
 
     # Add MSLK include directories for gemm_torch.h
     list(APPEND ATen_CUDA_INCLUDE ${MSLK_INCLUDE})
+
+    # Add MSLK_MAX_JOBS
+    if(MSLK_MAX_JOBS)
+      if(CMAKE_GENERATOR STREQUAL "Ninja")
+        set_property(GLOBAL APPEND PROPERTY JOB_POOLS mslk_pool=${MSLK_MAX_JOBS})
+        set_property(TARGET mslk PROPERTY JOB_POOL_COMPILE mslk_pool)
+      else()
+        message(WARNING "{MSLK_MAX_JOBS was ignored. This option is available with Ninja build system only")
+      endif()
+    endif()
   elseif(USE_ROCM)
     # MSLK only supports gfx942/gfx950. Auto-disable when none of those archs
     # are in PYTORCH_ROCM_ARCH; otherwise the mslk target ends up with an empty

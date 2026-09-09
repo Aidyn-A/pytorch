@@ -21,6 +21,8 @@
 #                            in pyproject.toml
 #   FLASH_ATTENTION_MAX_JOBS max concurrent FlashAttention CUDA compilations;
 #                            unset by default, set by CUDA CI based on runner memory
+#   MSLK_MAX_JOBS            max concurrent MSLK CUDA compilations;
+#                            unset by defaultl;
 #   CC / CXX / CFLAGS        compiler and flags; read by CMake / scikit-build-core
 #                            directly (CFLAGS also applies to C++ unless CXXFLAGS
 #                            is set)
@@ -146,6 +148,7 @@ set(_ENV_PASSTHROUGH
   INTEL_OMP_DIR
   MKL_THREADING
   MKLDNN_CPU_RUNTIME
+  MSLK_MAX_JOBS
   MSVC_Z7_OVERRIDE
   CAFFE2_USE_MSVC_STATIC_RUNTIME
   Numa_INCLUDE_DIR
